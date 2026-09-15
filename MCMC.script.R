@@ -207,8 +207,28 @@ loss.rates =
 # load Californa fishing lakes
 load(here::here('Data/Geospatial/', 'CA_Fish_Lakes.Rda'))
 
+### Load Retailer Data
+retailer.dat = 
+  read_csv(here::here('Data/', 'RetailerSinkers.csv'))
 
-# calc losses
+# generate summary stats for retailer data
+retail.sd = signif(sd(retailer.dat$g), digits = 3)
+retail.med = signif(median(retailer.dat$g), digits = 3)
+
+# generate table S2
+Retail.Summ =
+  retailer.dat %>%
+  group_by(Size) %>% 
+  summarise(mass = signif(min(g), digits = 3),
+            ct = n()) %>%
+  bind_rows(
+    tibble(Size = 'Median', mass = retail.med),
+    tibble(Size = 'Std. Dev.', mass = retail.sd))
+
+# export table
+write_csv(Retail.Summ, here::here('Figures/', 'TableS2.csv'))
+
+### Calc losses
 Sinker.Lakes = 
   Fish.Lakes %>%
   dplyr::mutate(
@@ -241,7 +261,7 @@ County.Summ =
                       across(where(is.numeric), sum),
                       across(where(is.character), ~'Total')))
 
-# generate data for table 4
+# generate data for table 1
 Loss.Summ = 
   County.Summ %>%
   slice_tail(n = 1) %>% 
@@ -257,3 +277,136 @@ Loss.Summ =
 
 # export table
 write_csv(Loss.Summ, here::here('Figures/', 'Table1.csv'))
+
+### Sensitivity Analysis
+Sens.Anal = 
+  Loss.Summ %>%
+  mutate(
+    `Mass of Pb low` = 
+      signif(`Number of Weights` * ((retail.med - retail.sd)*1e-6),
+             digits = 3),
+    `Mass of Pb hgh` = 
+      signif(`Number of Weights` * ((retail.med + retail.sd)*1e-6), 
+             digits = 3)) %>%
+  dplyr::select(-2) %>%
+  pivot_longer(
+    cols = starts_with('Mass'),
+    names_to = 'Type',
+    values_to = 'Mass') %>%
+  mutate(across(Type, 
+                ~case_when(
+                  str_detect(.x, 'low') ~ 'median - 1 SD',
+                  str_detect(.x, 'hgh') ~ 'median + 1 SD',
+                  .default = 'median')),
+         across(Scenario, 
+                ~factor(.x, levels = c('low', 'med', 'high'))),
+         across(Type, 
+                ~factor(.x, 
+                        levels = c('median - 1 SD', 
+                                   'median', 
+                                   'median + 1 SD')))) %>%
+  arrange(Type, Scenario) %>%
+  mutate(Year_Loss = 
+           signif(Mass/73, digits = 3),
+         Angler_Loss = 
+           signif((Year_Loss*1000)/1440000, digits = 3)) #1,440,000 is the number of freshwater anglers
+
+Sens.Anal.plt.dat = 
+  Sens.Anal %>% 
+  dplyr::select(c(1:3)) %>%
+  pivot_wider(names_from = Type,
+              values_from = Mass) %>%
+  setNames(c('Scenario', 'lower', 'Mass', 'upper'))
+  
+
+# visualize sensitivity analysis
+Sens.plot.a = 
+  ggplot() +
+  geom_errorbar(data = Sens.Anal.plt.dat,
+                mapping = aes(xmin = lower, xmax = upper, y = Scenario), 
+                width = 0.15, linewidth = 0.5, linetype = 5, 
+                colour = '#737373') +
+  geom_point(data = Sens.Anal.plt.dat, 
+             aes(x = Mass, y = Scenario, fill = Scenario), shape = 21, 
+             size = 2.5, stroke = 0.75) +
+  scale_fill_brewer(palette = 'RdBu', direction = -1, 
+                    guide = 'none') +
+  labs(title = '', 
+       x = 'Mass (tonnes Pb)', 
+       y = 'MCMC Scenario') + 
+  theme_classic2() +
+  theme(axis.title = element_text(size = 12),
+        legend.title = element_text(size = 8),
+        legend.text = element_text(size = 8),
+        plot.margin = margin(5.5, 2.5, 5.5, 1.5))
+
+# make a df of per angler losses for comparison to other studies
+Compares = 
+  #tibble(Estimate 
+  #       = c('U.S. annual losses', 'Market sales', 
+  #           'EU25 – low', 'EU25 – median', 'EU25 – high'),
+  #       Angler_Loss = c(0.114, 0.142, 0.1, 0.2, 0.301)) %>%
+  tibble(Estimate 
+         = c('U.S. annual losses', 'Market sales', 'EU25'),
+         Angler_Loss = c(0.114, 0.142, 0.2),
+         lower = c(NA, NA, 0.1),
+         upper = c(NA, NA, 0.301)) %>%
+  bind_rows(Sens.Anal %>% 
+              dplyr::select(-c(3:4)) %>%
+              pivot_wider(names_from = Type, 
+                          values_from = Angler_Loss) %>%
+              #unite('Estimate', Scenario:Type, remove = TRUE) %>%
+              setNames(c('Estimate', 'lower', 'Angler_Loss', 'upper')) %>%
+              mutate(across(Estimate, 
+                            ~str_c('MCMC – ', .x)))) %>%
+  mutate(
+    #across(Estimate, 
+    #       ~factor(.x, 
+    #               levels = c('MCMC – low', 'MCMC – med', 'MCMC – high',
+    #                          'Market sales', 'U.S. annual losses',
+    #                          'EU25 – low', 'EU25 – median', 'EU25 – high'))),
+    across(Estimate, 
+           ~factor(.x, 
+                   levels = c('MCMC – low', 'MCMC – med', 'MCMC – high',
+                              'Market sales', 'U.S. annual losses',
+                              'EU25'))),
+    lab = case_when(
+      str_detect(Estimate, 'MCMC') ~ 'MCMC',
+      str_detect(Estimate, 'EU')   ~ 'EU',
+      .default = as.character(Estimate)))
+
+Sens.plot.b = 
+  Compares %>%
+  ggplot(aes(x = Angler_Loss, y = Estimate)) +
+  geom_errorbar(data = Compares,
+                mapping = aes(xmin = lower, xmax = upper, y = Estimate), 
+                width = 0.15, linewidth = 0.5, colour = '#737373', 
+                linetype = 2) +
+  geom_point(aes(fill = lab), shape = 21, size = 2.5, stroke = 0.75) +
+  scale_fill_brewer(palette = 'Pastel1', guide = 'none') +
+  labs(title = '', 
+       x = 'Per Angler Loss (kg Pb/yr)', 
+       y = '') + 
+  theme_classic2() +
+  theme(axis.title = element_text(size = 12),
+        plot.margin = margin(5.5, 5.5, 5.5, .25))
+
+# Create combined plot for SI
+Sens.plot = 
+  ggarrange(Sens.plot.a, Sens.plot.b, ncol = 2, widths = c(1.25, 1.75),
+            labels = c('a.', 'b.'), 
+            label.x = c(0.21, 0.37), label.y = 0.9)
+
+  
+ggsave(here::here('Figures', 'FigS2.png'), plot = Sens.plot,
+       width = 6.5, height = 3, units = 'in', dpi =300)
+
+
+# export table
+write_csv(Sens.Anal %>%
+            setNames(c('Scenario', 'Type', 'Total Mass (tonnes)', 
+                       'Total Yearly Loss (tonnes Pb/year)', 
+                       'Per Angler Loss (kg Pb/year)')), 
+          here::here('Figures/', 'TableS3.csv'))
+
+

@@ -2,6 +2,7 @@
 library(sf)
 library(tidyverse)
 library(cowplot)
+library(ggspatial)
 library(ggpubr)
 
 here::i_am('Fishing_Weights_MCMC.Rproj')
@@ -67,6 +68,7 @@ rare.species.map =
     guide = 
       guide_legend(
         override.aes = list(linetype = "blank", shape = 16, size = 3))) +
+  annotation_scale(location = 'bl') +
   theme_classic2()
 
 rare.species.map
